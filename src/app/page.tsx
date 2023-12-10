@@ -71,6 +71,31 @@ export default function Home() {
     () => !!usdcAmount && isNumber(Number(usdcAmount)),
     [usdcAmount]
   );
+  const isOverETH = useMemo(
+    () => parseEther(ethAmount || "0") > ethBalance,
+    [ethAmount, ethBalance]
+  );
+  const isOverUSDC = useMemo(
+    () => parseUnits(usdcAmount || "0", 6) > usdcBalance,
+    [usdcAmount, usdcBalance]
+  );
+
+  const buttonDisabled = useMemo(() => {
+    return (
+      isConnectWallet &&
+      (!isValidETH || isOverETH || !isValidUSDC || isOverUSDC)
+    );
+  }, [isConnectWallet, isOverETH, isOverUSDC, isValidETH, isValidUSDC]);
+
+  const buttonTitle = useMemo(() => {
+    if (!isConnectWallet) return "Connect Wallet";
+    if (!isValidETH) return "Enter ETH amount";
+    if (isOverETH) return "Not enough ETH";
+    if (!isValidUSDC) return "Enter USDC amount";
+    if (isOverUSDC) return "Not enough USDC";
+
+    return "Add liquidity";
+  }, [isConnectWallet, isOverETH, isOverUSDC, isValidETH, isValidUSDC]);
 
   const onGetBalance = useCallback(async (_provider: BrowserProvider) => {
     if (!_provider) return;
@@ -273,6 +298,12 @@ export default function Home() {
         data={SHAPES}
         onSelectItem={onSelectShape}
       />
+      <InputToken
+        title="Bin step:"
+        value={binStep.toString()}
+        className="mt-4"
+        disabled={true}
+      />
       {/* <div className="flex mt-4">
         <InputToken
           tokenName="ETH"
@@ -289,7 +320,7 @@ export default function Home() {
       </div> */}
 
       <button
-        disabled={isConnectWallet && (!isValidETH || !isValidUSDC)}
+        disabled={buttonDisabled}
         onClick={
           isConnectWallet
             ? needApproveToken
@@ -297,21 +328,11 @@ export default function Home() {
               : onAddLiquidity
             : onConnectWallet
         }
-        className={`w-full h-12 bg-blue-400 rounded-lg mt-6 text-black/70 ${
-          isConnectWallet && (!isValidETH || !isValidUSDC)
-            ? "bg-gray-400 text-white"
-            : ""
+        className={`w-full h-12 bg-blue-400 rounded-lg mt-6 text-white ${
+          buttonDisabled ? "bg-gray-400" : ""
         }`}
       >
-        {isConnectWallet
-          ? !isValidETH
-            ? "Input ETH"
-            : !isValidUSDC
-            ? "Input USDC"
-            : needApproveToken
-            ? "Approve token"
-            : "Add Liquidity"
-          : "Connect Wallet"}
+        {buttonTitle}
       </button>
     </main>
   );
