@@ -1,113 +1,309 @@
-import Image from 'next/image'
+"use client";
+import InputToken from "@/components/input-token";
+import SelectShape, { SelectData } from "@/components/select-shape";
+import {
+  ethers,
+  BrowserProvider,
+  formatEther,
+  formatUnits,
+  parseEther,
+  parseUnits,
+} from "ethers";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import erc20Abi from "@/abis/json/ERC20.json";
+import lbFactoryAbi from "@/abis/json/LBFactory.json";
+import lbRouterAbi from "@/abis/json/LBRouter.json";
+import lbPairAbi from "@/abis/json/LBPair.json";
+import pancakeAbi from "@/abis/json/Pancake.json";
+import { getLiquidityConfig } from "@/utils/contract";
+import { LiquidityDistribution } from "@/types/pair";
+import { isNumber } from "lodash";
+
+const SHAPES: SelectData[] = [
+  {
+    id: LiquidityDistribution.SPOT.toString(),
+    label: "Spot",
+  },
+  {
+    id: LiquidityDistribution.CURVE.toString(),
+    label: "Curve",
+  },
+  {
+    id: LiquidityDistribution.BID_ASK.toString(),
+    label: "Bid-Ask",
+  },
+];
+
+const ARBITRUM = 42161;
+const WETH_ADDRESS = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1";
+const USDC_ADDRESS = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";
+const VAULT_USDC_ADDRESS = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";
+const LB_FACTORY_ADDRESS = "0x8e42f2F4101563bF679975178e880FD87d3eFd4e";
+const LB_ROUTER_ADDRESS = "0xb4315e873dBcf96Ffd0acd8EA43f689D8c20fB30";
+const PANCAKE_ADDRESS = "0x8cFe327CEc66d1C090Dd72bd0FF11d690C33a2Eb";
 
 export default function Home() {
+  const [shape, setShape] = useState<string>(SHAPES.at(0)?.id || "");
+  const [provider, setProvider] = useState<BrowserProvider | null>(null);
+  const [ethBalance, setETHBalance] = useState(0n);
+  const [usdcBalance, setUSDCBalance] = useState(0n);
+  const [walletAddress, setWalletAddress] = useState("");
+  const [usdcApproveToken, setUSDCApproveToken] = useState(0n);
+
+  const [ethAmount, setETHAmount] = useState("");
+  const [usdcAmount, setUSDCAmount] = useState("");
+  const [allowedAmountsSlippage, setAllowedAmountsSlippage] = useState("50");
+  const [binStep, setBinStep] = useState(15);
+  const [idSlippage, setIdSlippage] = useState(5);
+  const [activeId, setActiveId] = useState(0n);
+
+  const needApproveToken = useMemo(
+    () => parseUnits(usdcAmount || "0", 6) > usdcApproveToken,
+    [usdcAmount, usdcApproveToken]
+  );
+
+  const isConnectWallet = useMemo(() => !!walletAddress, [walletAddress]);
+  const isValidETH = useMemo(
+    () => !!ethAmount && isNumber(Number(ethAmount)),
+    [ethAmount]
+  );
+  const isValidUSDC = useMemo(
+    () => !!usdcAmount && isNumber(Number(usdcAmount)),
+    [usdcAmount]
+  );
+
+  const onConnectWallet = useCallback(async () => {
+    try {
+      if (!window.ethereum) {
+        console.log("MetaMask not installed;");
+        return;
+      }
+
+      const accounts = await window.ethereum.request({
+        method: "eth_requestAccounts",
+      });
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      await window.ethereum.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: ethers.toBeHex(ARBITRUM) }],
+      });
+      const signer = await provider.getSigner();
+
+      const usdcContract = new ethers.Contract(USDC_ADDRESS, erc20Abi, signer);
+      const lbFactoryContract = new ethers.Contract(
+        LB_FACTORY_ADDRESS,
+        lbFactoryAbi,
+        signer
+      );
+      const lpPairAddress = await lbFactoryContract.getLBPairInformation(
+        WETH_ADDRESS,
+        USDC_ADDRESS,
+        binStep
+      );
+      const lbPairContract = new ethers.Contract(
+        lpPairAddress.LBPair,
+        lbPairAbi,
+        signer
+      );
+
+      setProvider(provider);
+      setWalletAddress(signer.address);
+      setActiveId(await lbPairContract.getActiveId());
+      setETHBalance(await provider.getBalance(signer.address));
+      setUSDCBalance(await usdcContract.balanceOf(signer.address));
+      setUSDCApproveToken(
+        await usdcContract.allowance(signer.address, VAULT_USDC_ADDRESS)
+      );
+    } catch (error) {
+      console.log(`Error:`, error);
+    }
+  }, [binStep]);
+  const onSelectShape = useCallback((item: SelectData) => {
+    setShape(item.id);
+  }, []);
+  const onChangeETHAmount = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      setETHAmount(event.target.value);
+    },
+    []
+  );
+  const onMaxETHAmount = useCallback(() => {
+    setETHAmount(Number(formatEther(ethBalance.toString())).toString());
+  }, [ethBalance]);
+  const onChangeUSDCAmount = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      setUSDCAmount(event.target.value);
+    },
+    []
+  );
+  const onMaxUSDCAmount = useCallback(() => {
+    setUSDCAmount(Number(formatUnits(usdcBalance, 6)).toString());
+  }, [usdcBalance]);
+  const getMinTokenAmount = useCallback(
+    (amount: bigint, allowedAmountsSlippage: number) => {
+      return (amount * BigInt(10000 - allowedAmountsSlippage)) / BigInt(10000);
+    },
+    []
+  );
+
+  const onAddLiquidity = useCallback(async () => {
+    const distribution = Object.values(LiquidityDistribution).find(
+      (i) => i.toString() === shape
+    );
+    const { deltaIds, distributionX, distributionY } = getLiquidityConfig(
+      distribution as LiquidityDistribution
+    );
+    const currentTimeInSec = Math.floor(new Date().getTime() / 1000);
+    const deadline = currentTimeInSec + 3600;
+
+    const signer = await provider!.getSigner();
+    const lbRouterContract = new ethers.Contract(
+      LB_ROUTER_ADDRESS,
+      lbRouterAbi,
+      signer
+    );
+
+    const tx = await lbRouterContract.addLiquidityNATIVE(
+      {
+        tokenX: WETH_ADDRESS,
+        tokenY: USDC_ADDRESS,
+        binStep: binStep,
+        amountX: parseEther(ethAmount),
+        amountY: parseUnits(usdcAmount, 6),
+        amountXMin: getMinTokenAmount(
+          parseEther(ethAmount),
+          Number(allowedAmountsSlippage)
+        ),
+        amountYMin: getMinTokenAmount(
+          parseUnits(usdcAmount, 6),
+          Number(allowedAmountsSlippage)
+        ),
+        activeIdDesired: activeId,
+        idSlippage: idSlippage,
+        deltaIds: deltaIds,
+        distributionX: distributionX,
+        distributionY: distributionY,
+        to: walletAddress,
+        refundTo: walletAddress,
+        deadline,
+        gasLimit: BigInt(7920027),
+      },
+      {
+        gasLimit: BigInt(7920027),
+        value: parseEther(ethAmount),
+      }
+    );
+
+    const receipt = await tx.wait();
+    setETHAmount("");
+    setUSDCAmount("");
+    alert("Add liquidity successfully!");
+  }, [
+    activeId,
+    allowedAmountsSlippage,
+    binStep,
+    ethAmount,
+    getMinTokenAmount,
+    idSlippage,
+    provider,
+    shape,
+    usdcAmount,
+    walletAddress,
+  ]);
+
+  const onApproveToken = useCallback(async () => {
+    const signer = await provider?.getSigner();
+    const usdcContract = new ethers.Contract(USDC_ADDRESS, erc20Abi, signer);
+    const tasks = [];
+
+    if (parseUnits(usdcAmount, 6) > usdcApproveToken) {
+      tasks.push(
+        usdcContract
+          .approve(LB_ROUTER_ADDRESS, parseUnits(usdcAmount, 6))
+          .then(() => {
+            setUSDCApproveToken(parseUnits(usdcAmount, 6));
+          })
+      );
+    }
+    await Promise.all(tasks);
+  }, [provider, usdcAmount, usdcApproveToken]);
+
   return (
-    <main className="flex min-h-screen flex-col items-center justify-between p-24">
-      <div className="z-10 max-w-5xl w-full items-center justify-between font-mono text-sm lg:flex">
-        <p className="fixed left-0 top-0 flex w-full justify-center border-b border-gray-300 bg-gradient-to-b from-zinc-200 pb-6 pt-8 backdrop-blur-2xl dark:border-neutral-800 dark:bg-zinc-800/30 dark:from-inherit lg:static lg:w-auto  lg:rounded-xl lg:border lg:bg-gray-200 lg:p-4 lg:dark:bg-zinc-800/30">
-          Get started by editing&nbsp;
-          <code className="font-mono font-bold">src/app/page.tsx</code>
-        </p>
-        <div className="fixed bottom-0 left-0 flex h-48 w-full items-end justify-center bg-gradient-to-t from-white via-white dark:from-black dark:via-black lg:static lg:h-auto lg:w-auto lg:bg-none">
-          <a
-            className="pointer-events-none flex place-items-center gap-2 p-8 lg:pointer-events-auto lg:p-0"
-            href="https://vercel.com?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            By{' '}
-            <Image
-              src="/vercel.svg"
-              alt="Vercel Logo"
-              className="dark:invert"
-              width={100}
-              height={24}
-              priority
-            />
-          </a>
-        </div>
-      </div>
-
-      <div className="relative flex place-items-center before:absolute before:h-[300px] before:w-[480px] before:-translate-x-1/2 before:rounded-full before:bg-gradient-radial before:from-white before:to-transparent before:blur-2xl before:content-[''] after:absolute after:-z-20 after:h-[180px] after:w-[240px] after:translate-x-1/3 after:bg-gradient-conic after:from-sky-200 after:via-blue-200 after:blur-2xl after:content-[''] before:dark:bg-gradient-to-br before:dark:from-transparent before:dark:to-blue-700 before:dark:opacity-10 after:dark:from-sky-900 after:dark:via-[#0141ff] after:dark:opacity-40 before:lg:h-[360px] z-[-1]">
-        <Image
-          className="relative dark:drop-shadow-[0_0_0.3rem_#ffffff70] dark:invert"
-          src="/next.svg"
-          alt="Next.js Logo"
-          width={180}
-          height={37}
-          priority
+    <main className="flex min-h-screen flex-col p-6 bg-white">
+      <p className="text-lg font-semibold text-black">Deposit Liquidity</p>
+      <InputToken
+        tokenName="ETH"
+        className="mt-4"
+        balance={
+          isConnectWallet
+            ? Number(formatEther(ethBalance.toString())).toString()
+            : "..."
+        }
+        value={ethAmount}
+        onChange={onChangeETHAmount}
+        onMax={onMaxETHAmount}
+      />
+      <InputToken
+        tokenName="USDC"
+        className="mt-4"
+        balance={
+          isConnectWallet
+            ? Number(formatUnits(usdcBalance, 6)).toString()
+            : "..."
+        }
+        value={usdcAmount}
+        onChange={onChangeUSDCAmount}
+        onMax={onMaxUSDCAmount}
+      />
+      <p className="text-lg font-semibold text-black mt-8">
+        Choose Liquidity Shape
+      </p>
+      <SelectShape
+        className="mt-4"
+        value={shape}
+        data={SHAPES}
+        onSelectItem={onSelectShape}
+      />
+      {/* <div className="flex mt-4">
+        <InputToken
+          tokenName="ETH"
+          title="Min Price:"
+          className="flex-1 mr-2"
+          onChange={() => {}}
         />
-      </div>
+        <InputToken
+          tokenName="ETH"
+          title="Max Price:"
+          className="flex-1"
+          onChange={() => {}}
+        />
+      </div> */}
 
-      <div className="mb-32 grid text-center lg:max-w-5xl lg:w-full lg:mb-0 lg:grid-cols-4 lg:text-left">
-        <a
-          href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Docs{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Find in-depth information about Next.js features and API.
-          </p>
-        </a>
-
-        <a
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Learn{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Learn about Next.js in an interactive course with&nbsp;quizzes!
-          </p>
-        </a>
-
-        <a
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Templates{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Explore starter templates for Next.js.
-          </p>
-        </a>
-
-        <a
-          href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Deploy{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Instantly deploy your Next.js site to a shareable URL with Vercel.
-          </p>
-        </a>
-      </div>
+      <button
+        disabled={isConnectWallet && (!isValidETH || !isValidUSDC)}
+        onClick={
+          isConnectWallet
+            ? needApproveToken
+              ? onApproveToken
+              : onAddLiquidity
+            : onConnectWallet
+        }
+        className={`w-full h-12 bg-blue-400 rounded-lg mt-6 text-black/70 ${
+          isConnectWallet && (!isValidETH || !isValidUSDC)
+            ? "bg-gray-400 text-white"
+            : ""
+        }`}
+      >
+        {isConnectWallet
+          ? !isValidETH
+            ? "Input ETH"
+            : !isValidUSDC
+            ? "Input USDC"
+            : needApproveToken
+            ? "Approve token"
+            : "Add Liquidity"
+          : "Connect Wallet"}
+      </button>
     </main>
-  )
+  );
 }
