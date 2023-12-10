@@ -93,9 +93,17 @@ export default function Home() {
     if (isOverETH) return "Not enough ETH";
     if (!isValidUSDC) return "Enter USDC amount";
     if (isOverUSDC) return "Not enough USDC";
+    if (needApproveToken) return "Approve USDC";
 
     return "Add liquidity";
-  }, [isConnectWallet, isOverETH, isOverUSDC, isValidETH, isValidUSDC]);
+  }, [
+    isConnectWallet,
+    isOverETH,
+    isOverUSDC,
+    isValidETH,
+    isValidUSDC,
+    needApproveToken,
+  ]);
 
   const onGetBalance = useCallback(async (_provider: BrowserProvider) => {
     if (!_provider) return;
