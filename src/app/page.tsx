@@ -72,6 +72,14 @@ export default function Home() {
     [usdcAmount]
   );
 
+  const onGetBalance = useCallback(async (_provider: BrowserProvider) => {
+    if (!_provider) return;
+    const signer = await _provider.getSigner();
+    const usdcContract = new ethers.Contract(USDC_ADDRESS, erc20Abi, signer);
+    setETHBalance(await _provider.getBalance(signer.address));
+    setUSDCBalance(await usdcContract.balanceOf(signer.address));
+  }, []);
+
   const onConnectWallet = useCallback(async () => {
     try {
       if (!window.ethereum) {
@@ -109,15 +117,15 @@ export default function Home() {
       setProvider(provider);
       setWalletAddress(signer.address);
       setActiveId(await lbPairContract.getActiveId());
-      setETHBalance(await provider.getBalance(signer.address));
-      setUSDCBalance(await usdcContract.balanceOf(signer.address));
       setUSDCApproveToken(
         await usdcContract.allowance(signer.address, VAULT_USDC_ADDRESS)
       );
+      onGetBalance(provider);
     } catch (error) {
       console.log(`Error:`, error);
     }
-  }, [binStep]);
+  }, [binStep, onGetBalance]);
+
   const onSelectShape = useCallback((item: SelectData) => {
     setShape(item.id);
   }, []);
@@ -194,9 +202,9 @@ export default function Home() {
       }
     );
 
-    const receipt = await tx.wait();
     setETHAmount("");
     setUSDCAmount("");
+    provider && onGetBalance(provider);
     alert("Add liquidity successfully!");
   }, [
     activeId,
@@ -205,6 +213,7 @@ export default function Home() {
     ethAmount,
     getMinTokenAmount,
     idSlippage,
+    onGetBalance,
     provider,
     shape,
     usdcAmount,
